@@ -503,7 +503,7 @@
                     <button class="btn">Ver cuestionarios</button>
                 </div>
                 
-                <div class="menu-card" onclick="showJoinQuiz()">
+                <div class="menu-card" onclick="window.location.href='join_quiz.html'">
                     <h3>🔗 Unirme con código</h3>
                     <p>Únete a un quiz usando un código de sala</p>
                     <button class="btn">Ingresar código</button>
@@ -548,23 +548,6 @@
                 <div id="quiz-list" class="quiz-list">
                     <div class="loading"></div>
                 </div>
-            </div>
-        </div>
-
-        <div id="join-quiz-screen" class="hidden">
-            <button class="btn back-btn" onclick="showMainScreen()">← Volver</button>
-            
-            <div class="quiz-creation">
-                <h2>Unirme con Código</h2>
-                <div class="form-group">
-                    <label for="join-code">Código del Quiz</label>
-                    <input type="text" id="join-code" placeholder="Ingresa el código de 6 dígitos">
-                </div>
-                <div class="form-group">
-                    <label for="player-name-join">Tu Nombre</label>
-                    <input type="text" id="player-name-join" placeholder="Tu nombre para el quiz">
-                </div>
-                <button class="btn" onclick="joinQuizWithCode()">🚀 Unirme al Quiz</button>
             </div>
         </div>
 
@@ -648,7 +631,7 @@
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
         import { getDatabase, ref, push, set, get, onValue, off, remove, update } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-database.js';
 
-        const firebaseConfig = {
+         const firebaseConfig = {
             apiKey: "AIzaSyAC3xy73lOmUxyN0HaNueTtaI_cmoIL4sY",
             authDomain: "cuestionario-5855f.firebaseapp.com",
             databaseURL: "https://cuestionario-5855f-default-rtdb.firebaseio.com",
@@ -659,6 +642,7 @@
             measurementId: "G-81R4G7YSFD"
         };
 
+        
         const app = initializeApp(firebaseConfig);
         const database = getDatabase(app);
 
@@ -674,12 +658,31 @@
         window.questionCounter = 0; 
         window.playerName = ''; 
         window.realtimeListenerRef = null; 
+        window.currentPlayerId = null; // Variable para el ID de la sesión del jugador actual
         
         // Funciones para mostrar/ocultar pantallas
         window.showMainScreen = function() {
             hideAllScreens();
             stopRealtimeUpdates(); 
             document.getElementById('main-screen').classList.remove('hidden');
+            // Limpiar parámetros de URL al volver a la pantalla principal
+            if (window.history.replaceState) {
+                const url = new URL(window.location.href);
+                url.search = '';
+                window.history.replaceState({path: url.href}, '', url.href);
+            }
+            // Limpiar datos de localStorage relacionados con el juego actual
+            localStorage.removeItem('currentQuizId');
+            localStorage.removeItem('currentQuiz');
+            localStorage.removeItem('currentPlayerId');
+            localStorage.removeItem('currentPlayerName');
+            // Resetear variables globales del jugador
+            window.currentQuiz = null;
+            window.currentQuizId = null;
+            window.currentQuestionIndex = 0;
+            window.score = 0;
+            window.playerName = ''; 
+            window.currentPlayerId = null; 
         };
 
         window.showCreateQuiz = function() {
@@ -697,19 +700,14 @@
             document.getElementById('quiz-list-screen').classList.remove('hidden');
             loadQuizList();
         };
-
-        window.showJoinQuiz = function() {
-            hideAllScreens();
-            stopRealtimeUpdates();
-            document.getElementById('join-quiz-screen').classList.remove('hidden');
-        };
-
+        
         window.showStartQuizPrePlayer = function(quizId, quizTitle) {
             hideAllScreens();
             stopRealtimeUpdates();
             document.getElementById('start-quiz-pre-player-screen').classList.remove('hidden');
             document.getElementById('pre-player-quiz-title').textContent = `Comenzar Quiz: ${quizTitle}`;
             document.getElementById('confirm-start-quiz-btn').onclick = () => confirmStartQuiz(quizId);
+            document.getElementById('player-name-start').value = ''; // Limpiar el campo de nombre
         };
 
         window.showQuizPlayerResults = function(quizId, quizTitle) {
@@ -727,8 +725,15 @@
             loadAdminQuizList();
         };
 
+        // Nueva función para mostrar la pantalla del jugador (llamada desde join_quiz.html o direct play)
+        window.showQuizPlayer = function() {
+            hideAllScreens();
+            document.getElementById('quiz-player-screen').classList.remove('hidden');
+            showQuestion(); // Asume que currentQuiz, currentQuizId, currentPlayerId, currentPlayerName ya están cargados
+        };
+
         function hideAllScreens() {
-            const screens = ['main-screen', 'create-quiz-screen', 'quiz-list-screen', 'join-quiz-screen', 'start-quiz-pre-player-screen', 'quiz-player-screen', 'results-screen', 'quiz-player-results-screen', 'admin-dashboard-screen'];
+            const screens = ['main-screen', 'create-quiz-screen', 'quiz-list-screen', 'start-quiz-pre-player-screen', 'quiz-player-screen', 'results-screen', 'quiz-player-results-screen', 'admin-dashboard-screen'];
             screens.forEach(screen => {
                 document.getElementById(screen).classList.add('hidden');
             });
@@ -853,9 +858,7 @@
                 description,
                 questions,
                 code: quizCode,
-                createdAt: new Date().toISOString(),
-                plays: 0,
-                players: {} 
+                createdAt: new Date().toISOString()
             };
 
             const quizzesRef = ref(database, 'quizzes');
@@ -947,6 +950,30 @@
                 return;
             }
             window.playerName = playerNameInput; 
+            
+            // Obtener el quiz para saber el total de preguntas
+            const quizRef = ref(database, `quizzes/${quizId}`);
+            const snapshot = await get(quizRef);
+            if (!snapshot.exists()) {
+                alert('El quiz no existe.');
+                return;
+            }
+            const quizData = snapshot.val();
+            const totalQuestions = quizData.questions.length;
+
+            // Iniciar sesión de juego para el jugador
+            const playersRef = ref(database, `sessions/${quizId}/players`);
+            const newPlayerEntryRef = push(playersRef);
+            window.currentPlayerId = newPlayerEntryRef.key; // Guarda el ID del jugador actual
+            
+            await set(newPlayerEntryRef, {
+                name: playerNameInput,
+                score: 0,
+                lastAnswerTime: Date.now(),
+                isFinished: false,
+                totalQuestions: totalQuestions // Guardar totalQuestions al inicio
+            });
+
             await startQuiz(quizId);
         };
 
@@ -976,57 +1003,13 @@
             }
         };
 
-        window.joinQuizWithCode = async function() {
-            const code = document.getElementById('join-code').value.trim().toUpperCase();
-            const playerNameInput = document.getElementById('player-name-join').value.trim(); 
-            
-            if (!code) {
-                alert('Por favor ingresa el código del quiz.');
-                return;
-            }
-            if (!playerNameInput) { 
-                alert('Por favor ingresa tu nombre para unirte al quiz.');
-                return;
-            }
-            window.playerName = playerNameInput; 
-            
-            try {
-                const quizzesRef = ref(database, 'quizzes');
-                const snapshot = await get(quizzesRef);
-                
-                if (snapshot.exists()) {
-                    const quizzes = snapshot.val();
-                    const quizEntry = Object.entries(quizzes).find(([id, quiz]) => quiz.code === code);
-                    
-                    if (quizEntry) {
-                        window.currentQuiz = quizEntry[1];
-                        window.currentQuizId = quizEntry[0]; 
-                        window.currentQuestionIndex = 0;
-                        window.score = 0;
-                        window.playerAnswers = [];
-                        
-                        hideAllScreens();
-                        document.getElementById('quiz-player-screen').classList.remove('hidden');
-                        showQuestion();
-                    } else {
-                        alert('Código de quiz no válido. Verifica el código e intenta de nuevo.');
-                    }
-                } else {
-                    alert('No hay quizzes disponibles en la plataforma.');
-                }
-            } catch (error) {
-                alert('Error al buscar el quiz: ' + error.message);
-                console.error('Error al buscar quiz por código:', error);
-            }
-        };
-
         function showQuestion() {
             if (window.timer) {
                 clearInterval(window.timer);
             }
 
             if (!window.currentQuiz || window.currentQuestionIndex >= window.currentQuiz.questions.length) {
-                showResults();
+                showResults(); // Ir a la pantalla de resultados cuando no hay más preguntas
                 return;
             }
 
@@ -1086,6 +1069,16 @@
                     // **MEJORADO: Mensaje de tiempo agotado**
                     showFeedbackMessage('¡Tiempo agotado! ⌛', 'incorrect');
 
+                    // Actualizar el score del jugador en Firebase (si no se ha respondido)
+                    if (window.currentPlayerId && window.currentQuizId) {
+                        const playerSessionRef = ref(database, `sessions/${window.currentQuizId}/players/${window.currentPlayerId}`);
+                        update(playerSessionRef, {
+                            lastAnswerTime: Date.now() 
+                        }).catch(error => {
+                            console.error('Error al actualizar tiempo de jugador en timeout:', error);
+                        });
+                    }
+
                     setTimeout(() => {
                         window.currentQuestionIndex++;
                         showQuestion();
@@ -1137,6 +1130,17 @@
             }
             
             window.playerAnswers.push(selectedIndex);
+
+            // Actualizar el score del jugador en tiempo real en Firebase
+            if (window.currentPlayerId && window.currentQuizId) {
+                const playerSessionRef = ref(database, `sessions/${window.currentQuizId}/players/${window.currentPlayerId}`);
+                update(playerSessionRef, {
+                    score: window.score,
+                    lastAnswerTime: Date.now()
+                }).catch(error => {
+                    console.error('Error al actualizar score de jugador:', error);
+                });
+            }
             
             setTimeout(() => {
                 document.getElementById('next-btn').style.display = 'block';
@@ -1169,10 +1173,14 @@
             const scoreMessage = document.getElementById('score-message');
             const playerNameDisplay = document.getElementById('player-name-display'); 
 
-            playerNameDisplay.textContent = window.playerName; 
-            scoreDisplay.textContent = `${window.score}/${window.currentQuiz.questions.length}`;
+            // Asegurarse de que playerName está disponible
+            // Si el nombre no está en window.playerName, intenta recuperarlo de localStorage
+            playerNameDisplay.textContent = window.playerName || localStorage.getItem('currentPlayerName') || 'Jugador Desconocido'; 
             
-            const percentage = (window.score / window.currentQuiz.questions.length) * 100;
+            const totalQuestions = window.currentQuiz ? window.currentQuiz.questions.length : 0;
+            scoreDisplay.textContent = `${window.score}/${totalQuestions}`;
+            
+            const percentage = totalQuestions > 0 ? (window.score / totalQuestions) * 100 : 0;
             
             if (percentage >= 90) {
                 scoreMessage.textContent = '🏆 ¡Perfecto! Eres un maestro del tema.';
@@ -1192,25 +1200,22 @@
         }
 
         async function savePlayerResult() {
-            if (window.currentQuizId && window.playerName) {
-                const playersRef = ref(database, `quizzes/${window.currentQuizId}/players`);
-                const newPlayerEntryRef = push(playersRef); 
-                
-                const playerResult = {
-                    name: window.playerName,
-                    score: window.score,
-                    totalQuestions: window.currentQuiz.questions.length,
-                    timestamp: new Date().toISOString()
-                };
-
+            // Asegurarse de que currentPlayerId y currentQuizId están definidos antes de intentar guardar
+            if (window.currentQuizId && window.currentPlayerId && window.currentQuiz) {
+                const playerSessionRef = ref(database, `sessions/${window.currentQuizId}/players/${window.currentPlayerId}`);
                 try {
-                    await set(newPlayerEntryRef, playerResult);
-                    console.log('Resultado del jugador guardado en Firebase.');
+                    await update(playerSessionRef, {
+                        score: window.score,
+                        totalQuestions: window.currentQuiz.questions.length, // Asegurar que se guarda el total
+                        isFinished: true, // Marcar que ha terminado el juego
+                        timestamp: new Date().toISOString() // Registrar el tiempo final
+                    });
+                    console.log('Resultado final del jugador actualizado en Firebase.');
                 } catch (error) {
-                    console.error('Error al guardar el resultado del jugador:', error);
+                    console.error('Error al guardar el resultado final del jugador:', error);
                 }
             } else {
-                console.warn('No se pudo guardar el resultado del jugador: Faltan quizId o playerName.');
+                console.warn('No se pudo guardar el resultado del jugador: Faltan quizId, currentPlayerId o currentQuiz.');
             }
         }
 
@@ -1219,15 +1224,36 @@
             playerResultsContainer.innerHTML = '<div class="loading"></div>';
 
             try {
-                const playersRef = ref(database, `quizzes/${quizId}/players`);
-                const snapshot = await get(playersRef);
+                // Busca en las sesiones activas, no en quizzes directamente
+                const sessionsRef = ref(database, `sessions/${quizId}/players`); 
+                const snapshot = await get(sessionsRef);
 
                 if (snapshot.exists()) {
                     const players = snapshot.val();
+                    
+                    // Filtrar solo los jugadores que han finalizado el juego (isFinished: true)
+                    // Y obtener los datos más recientes y/o mejores de cada jugador por nombre si hay duplicados
+                    const processedPlayers = {}; 
+                    Object.values(players).forEach(player => {
+                        // Solo considerar jugadores que han terminado el quiz y tienen totalQuestions
+                        if (player.isFinished && player.totalQuestions !== undefined && player.totalQuestions !== null) { 
+                            // Si ya existe un resultado para este nombre, actualizar si el actual es más reciente/mejor
+                            if (!processedPlayers[player.name] || 
+                                (player.score > processedPlayers[player.name].score) ||
+                                (player.score === processedPlayers[player.name].score && new Date(player.timestamp) > new Date(processedPlayers[player.name].timestamp))
+                            ) {
+                                processedPlayers[player.name] = player;
+                            }
+                        }
+                    });
+
+                    const sortedPlayers = Object.values(processedPlayers).sort((a, b) => b.score - a.score);
+
                     let tableHtml = `
                         <table class="player-results-table">
                             <thead>
                                 <tr>
+                                    <th>Posición</th>
                                     <th>Nombre</th>
                                     <th>Puntuación</th>
                                     <th>Fecha</th>
@@ -1236,18 +1262,23 @@
                             <tbody>
                     `;
 
-                    const sortedPlayers = Object.values(players).sort((a, b) => b.score - a.score);
-
-                    sortedPlayers.forEach(player => {
-                        const date = new Date(player.timestamp).toLocaleString();
-                        tableHtml += `
-                            <tr>
-                                <td>${player.name}</td>
-                                <td>${player.score}/${player.totalQuestions}</td>
-                                <td>${date}</td>
-                            </tr>
-                        `;
-                    });
+                    if (sortedPlayers.length > 0) {
+                        sortedPlayers.forEach((player, index) => {
+                            const date = player.timestamp ? new Date(player.timestamp).toLocaleString() : 'N/A';
+                            // Un jugador es 'winner' si es el primero Y ha terminado el quiz
+                            const isWinner = (index === 0 && player.isFinished);
+                            tableHtml += `
+                                <tr class="${isWinner ? 'winner' : ''}">
+                                    <td>${index + 1}</td>
+                                    <td>${player.name}</td>
+                                    <td>${player.score}/${player.totalQuestions || 'N/A'}</td>
+                                    <td>${date}</td>
+                                </tr>
+                            `;
+                        });
+                    } else {
+                        tableHtml += `<tr><td colspan="4">No hay resultados finalizados para mostrar.</td></tr>`;
+                    }
 
                     tableHtml += `
                             </tbody>
@@ -1263,18 +1294,24 @@
             }
         }
 
+
         window.playAgain = function() {
-            if (window.currentQuiz) {
-                window.currentQuestionIndex = 0;
-                window.score = 0;
-                window.playerAnswers = [];
-                
-                hideAllScreens();
-                document.getElementById('quiz-player-screen').classList.remove('hidden');
-                showQuestion();
-            } else {
-                showMainScreen(); 
-            }
+            // Reinicia las variables del juego
+            window.currentQuestionIndex = 0;
+            window.score = 0;
+            window.playerAnswers = [];
+            // Limpiar datos de localStorage del juego actual
+            localStorage.removeItem('currentQuizId');
+            localStorage.removeItem('currentQuiz');
+            localStorage.removeItem('currentPlayerId');
+            localStorage.removeItem('currentPlayerName');
+            window.currentQuiz = null;
+            window.currentQuizId = null;
+            window.currentPlayerId = null;
+            window.playerName = '';
+
+            // Volver a la pantalla principal para que el usuario elija qué hacer
+            showMainScreen(); 
         };
 
         // **MEJORADO: Funciones para el Panel de Administración**
@@ -1326,7 +1363,7 @@
             const resultsContainer = document.getElementById('admin-results-table-container');
             resultsContainer.innerHTML = '<p>Cargando resultados en tiempo real...</p>';
 
-            const playersRef = ref(database, `quizzes/${quizId}/players`);
+            const playersRef = ref(database, `sessions/${quizId}/players`); // Ahora escucha en 'sessions'
             window.realtimeListenerRef = playersRef; 
 
             onValue(playersRef, (snapshot) => {
@@ -1339,26 +1376,38 @@
                                     <th>Posición</th>
                                     <th>Nombre</th>
                                     <th>Puntuación</th>
-                                    <th>Fecha del juego</th>
+                                    <th>Estado</th>
+                                    <th>Última Actividad</th>
                                 </tr>
                             </thead>
                             <tbody>
                     `;
 
-                    // Convertir a array y ordenar por puntuación descendente
-                    const sortedPlayers = Object.values(players).sort((a, b) => b.score - a.score);
+                    // Convertir a array y ordenar por puntuación descendente, luego por última actividad
+                    const sortedPlayers = Object.values(players).sort((a, b) => {
+                        if (b.score !== a.score) {
+                            return b.score - a.score;
+                        }
+                        // Si tienen el mismo score, el que terminó primero o el que tiene actividad más reciente
+                        if (a.isFinished && !b.isFinished) return -1; // Finalizado antes que no finalizado
+                        if (!a.isFinished && b.isFinished) return 1;
+                        return (new Date(b.timestamp || b.lastAnswerTime)) - (new Date(a.timestamp || a.lastAnswerTime));
+                    });
                     
                     sortedPlayers.forEach((player, index) => {
-                        const date = new Date(player.timestamp).toLocaleString();
-                        // Asignar la clase 'winner' solo al primer elemento después de ordenar
-                        const isWinner = (index === 0 && sortedPlayers.length > 0); 
+                        const status = player.isFinished ? 'Completado ✅' : 'Jugando...';
+                        const lastActivity = player.timestamp ? new Date(player.timestamp).toLocaleTimeString() : (player.lastAnswerTime ? new Date(player.lastAnswerTime).toLocaleTimeString() : 'N/A');
+                        
+                        // Un jugador es 'winner' si es el primero Y ha terminado el quiz
+                        const isWinner = (index === 0 && player.isFinished);
                         
                         tableHtml += `
                             <tr class="${isWinner ? 'winner' : ''}">
                                 <td>${index + 1}</td>
                                 <td>${player.name}</td>
-                                <td>${player.score}/${player.totalQuestions}</td>
-                                <td>${date}</td>
+                                <td>${player.score}/${player.totalQuestions || 'N/A'}</td>
+                                <td>${status}</td>
+                                <td>${lastActivity}</td>
                             </tr>
                         `;
                     });
@@ -1393,8 +1442,10 @@
             if (confirm(`¿Estás seguro de que quieres eliminar el quiz "${quizTitle}"? Esta acción es irreversible.`)) {
                 try {
                     const quizRef = ref(database, `quizzes/${quizId}`);
+                    const sessionsRef = ref(database, `sessions/${quizId}`); // También eliminar sesiones asociadas
                     await remove(quizRef);
-                    alert(`El quiz "${quizTitle}" ha sido eliminado exitosamente.`);
+                    await remove(sessionsRef); // Eliminar las sesiones de juego
+                    alert(`El quiz "${quizTitle}" y sus sesiones asociadas han sido eliminados exitosamente.`);
                     loadAdminQuizList(); // Recargar la lista de quizzes en el panel de administración
                     stopRealtimeUpdates(); // Detener el monitoreo si se estaba viendo este quiz
                 } catch (error) {
@@ -1409,7 +1460,37 @@
             if (document.getElementById('questions-container').children.length === 0) {
                 addQuestion();
             }
-            showMainScreen(); 
+
+            // LÓGICA PARA MANEJAR LA REDIRECCIÓN DESDE join_quiz.html o iniciar juego directo
+            const urlParams = new URLSearchParams(window.location.search);
+            const screenParam = urlParams.get('screen');
+            const quizIdParam = urlParams.get('quizId');
+
+            if (screenParam === 'player' && quizIdParam) {
+                // Cargar los datos del quiz y jugador desde localStorage
+                const storedQuiz = localStorage.getItem('currentQuiz');
+                const storedPlayerId = localStorage.getItem('currentPlayerId');
+                const storedPlayerName = localStorage.getItem('currentPlayerName');
+
+                if (storedQuiz && storedPlayerId && storedPlayerName) {
+                    window.currentQuiz = JSON.parse(storedQuiz);
+                    window.currentPlayerId = storedPlayerId;
+                    window.playerName = storedPlayerName; // Asegurar que playerName esté en window
+                    window.currentQuizId = quizIdParam; // Asegurarse de tener el ID del quiz
+
+                    showQuizPlayer(); // Mostrar la pantalla del jugador del quiz
+                } else {
+                    // Si falta información, volver a la pantalla principal y limpiar localStorage
+                    alert('Error al iniciar el quiz. Por favor, intenta unirte de nuevo o selecciona un quiz para jugar.');
+                    localStorage.removeItem('currentQuizId');
+                    localStorage.removeItem('currentQuiz');
+                    localStorage.removeItem('currentPlayerId');
+                    localStorage.removeItem('currentPlayerName');
+                    showMainScreen(); // Ir a la pantalla principal sin intentar jugar
+                }
+            } else {
+                showMainScreen(); // Mostrar la pantalla principal por defecto si no hay parámetros de juego
+            }
         });
     </script>
 </body>
